@@ -33,8 +33,12 @@ from musicdl.modules.utils.neteaseutils import MUSIC_QUALITIES
 # ---------------------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HERE, 'static')
-DOWNLOAD_DIR = os.path.join(HERE, 'downloads')
-SETTINGS_PATH = os.path.join(HERE, 'settings.json')
+DOWNLOAD_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get('MUSICDL_DOWNLOAD_DIR', os.path.join(HERE, 'downloads'))
+))
+SETTINGS_PATH = os.path.abspath(os.path.expanduser(
+    os.environ.get('MUSICDL_SETTINGS_PATH', os.path.join(HERE, 'settings.json'))
+))
 
 
 def _load_settings():
@@ -555,5 +559,6 @@ def api_file(download_id):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f'\n  🎵  Music player running at  http://127.0.0.1:{port}\n')
-    app.run(host='127.0.0.1', port=port, threaded=True, debug=False)
+    host = os.environ.get('MUSICDL_HOST', '127.0.0.1')
+    print(f'\n  🎵  Music player running at  http://{host}:{port}\n')
+    app.run(host=host, port=port, threaded=True, debug=False)
