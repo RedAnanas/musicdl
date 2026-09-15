@@ -20,9 +20,12 @@ import json
 import queue
 import threading
 import requests
+from pathlib import Path
 from flask import Flask, request, Response, jsonify, send_from_directory, stream_with_context
 
 from musicdl import musicdl
+from musicdl.modules import MusicClientBuilder, SongInfoUtils
+from musicdl.modules.utils.neteaseutils import MUSIC_QUALITIES
 
 
 # ---------------------------------------------------------------------------
@@ -31,17 +34,47 @@ from musicdl import musicdl
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HERE, 'static')
 DOWNLOAD_DIR = os.path.join(HERE, 'downloads')
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+SETTINGS_PATH = os.path.join(HERE, 'settings.json')
 
-# All sources we expose. Only Migu is enabled by default (per requirement);
-# the others are one toggle away in the UI.
-SUPPORTED_SOURCES = {
-    'MiguMusicClient':    {'label': '咪咕音乐', 'short': 'Migu',    'default': True},
-    'NeteaseMusicClient': {'label': '网易云音乐', 'short': 'Netease', 'default': False},
-    'KuwoMusicClient':    {'label': '酷我音乐', 'short': 'Kuwo',    'default': False},
-    'QQMusicClient':      {'label': 'QQ音乐',   'short': 'QQ',      'default': False},
+
+def _load_settings():
+    try:
+        with open(SETTINGS_PATH, 'r', encoding='utf-8') as fp:
+            saved = json.load(fp)
+        path = saved.get('download_dir')
+        if isinstance(path, str) and os.path.isabs(path):
+            return {'download_dir': os.path.abspath(os.path.expanduser(path))}
+    except (OSError, ValueError, TypeError):
+        pass
+    return {'download_dir': DOWNLOAD_DIR}
+
+
+SETTINGS = _load_settings()
+
+# 网易云从无损开始尝试；不可用时才降级到极高和标准品质。
+MUSIC_QUALITIES[:] = ['lossless', 'exhigh', 'standard']
+
+SOURCE_LABELS = {
+    'MiguMusicClient': '咪咕音乐', 'NeteaseMusicClient': '网易云音乐',
+    'KuwoMusicClient': '酷我音乐', 'QQMusicClient': 'QQ音乐',
+    'KugouMusicClient': '酷狗音乐', 'QianqianMusicClient': '千千音乐',
 }
-SOURCE_ORDER = ['MiguMusicClient', 'NeteaseMusicClient', 'KuwoMusicClient', 'QQMusicClient']
+SOURCE_ORDER = [
+    'NeteaseMusicClient', 'QQMusicClient', 'KuwoMusicClient', 'KugouMusicClient',
+    'MiguMusicClient', 'BilibiliMusicClient', 'AppleMusicClient',
+    'YouTubeMusicClient', 'SpotifyMusicClient',
+]
+missing_sources = [source for source in SOURCE_ORDER if source not in MusicClientBuilder.REGISTERED_MODULES]
+if missing_sources:
+    raise RuntimeError(f'未注册的音乐源: {", ".join(missing_sources)}')
+SUPPORTED_SOURCES = {
+    source: {
+        'label': SOURCE_LABELS.get(source, source.removesuffix('MusicClient')),
+        'short': source.removesuffix('MusicClient'),
+        'default': source in {'NeteaseMusicClient', 'QQMusicClient', 'KuwoMusicClient', 'KugouMusicClient'},
+    }
+    for source in SOURCE_ORDER
+}
 
 SEARCH_SIZE_PER_SOURCE = 8       # how many tracks to try to resolve per source
 PER_SOURCE_TIMEOUT = 35          # seconds before a hanging source is abandoned
@@ -57,19 +90,19 @@ RESULT_EXT_TO_MIME = {
 class ClientManager:
     def __init__(self):
         self._lock = threading.Lock()
-        self._mc = None
+        self._clients = {}
 
-    def _build(self):
-        cfg = {s: {'search_size_per_source': SEARCH_SIZE_PER_SOURCE, 'disable_print': True}
-               for s in SUPPORTED_SOURCES}
-        return musicdl.MusicClient(music_sources=list(SUPPORTED_SOURCES.keys()),
-                                   init_music_clients_cfg=cfg)
+    def _build(self, source):
+        return musicdl.MusicClient(
+            music_sources=[source],
+            init_music_clients_cfg={source: {'search_size_per_source': SEARCH_SIZE_PER_SOURCE, 'disable_print': True}},
+        )
 
     def client(self, source):
         with self._lock:
-            if self._mc is None:
-                self._mc = self._build()
-        return self._mc.music_clients[source]
+            if source not in self._clients:
+                self._clients[source] = self._build(source).music_clients[source]
+        return self._clients[source]
 
 
 MANAGER = ClientManager()
@@ -129,6 +162,7 @@ def _track_payload(song_info, token):
         'singers': s(song_info.singers) or '未知艺人',
         'album': s(song_info.album),
         'ext': ext,
+        'format': ext.upper() or '未知',
         'file_size': s(song_info.file_size),
         'duration': s(song_info.duration),
         'cover_url': s(song_info.cover_url),
@@ -218,7 +252,7 @@ def search_stream(keyword, sources):
 def _safe_search(client, keyword, url, bucket, progress):
     try:
         client._search(keyword=keyword, search_url=url, request_overrides={},
-                        song_infos=bucket, progress=progress, progress_id=0)
+                        song_infos=bucket, progress=progress)
     except Exception:
         pass
 
@@ -256,6 +290,24 @@ def _safe_name(name):
     return name[:120] or 'track'
 
 
+def _embed_metadata(song):
+    audio_path = Path(song.save_path)
+    lyrics = SongInfoUtils.normalizetext(getattr(song, 'lyric', None))
+    title = SongInfoUtils.normalizetext(getattr(song, 'song_name', None))
+    album = SongInfoUtils.normalizetext(getattr(song, 'album', None))
+    artists = SongInfoUtils.normalizetext(getattr(song, 'singers', None))
+    cover = SongInfoUtils.normalizetext(getattr(song, 'cover_url', None))
+    if lyrics:
+        SongInfoUtils.safeeditaudio(audio_path, SongInfoUtils.embedlyrics,
+                                    overwrite=False, lyrics_text=lyrics)
+    if title or album or artists:
+        SongInfoUtils.safeeditaudio(audio_path, SongInfoUtils.embedbasictags,
+                                    overwrite=False, title=title, album=album, artists=artists)
+    if cover and SongInfoUtils.lookslikecoversource(cover):
+        SongInfoUtils.safeeditaudio(audio_path, SongInfoUtils.embedcover,
+                                    overwrite=False, cover_source=cover)
+
+
 def run_download(download_id, token):
     entry = REGISTRY.get(token)
     if not entry:
@@ -268,7 +320,7 @@ def run_download(download_id, token):
         return
 
     source = entry['source']
-    sub = os.path.join(DOWNLOAD_DIR, SUPPORTED_SOURCES.get(source, {}).get('short', source))
+    sub = os.path.join(SETTINGS['download_dir'], SUPPORTED_SOURCES.get(source, {}).get('short', source))
     os.makedirs(sub, exist_ok=True)
     ext = (str(song.ext) or 'mp3').lstrip('.')
     fname = f"{_safe_name(str(song.song_name))} - {_safe_name(str(song.singers))}.{ext}"
@@ -299,6 +351,12 @@ def run_download(download_id, token):
                         _set_dl(download_id, downloaded=done, total=total, speed=speed)
                         last, last_bytes = now, done
             os.replace(tmp, path)
+            song._save_path = path
+            song.work_dir = sub
+            try:
+                _embed_metadata(song)
+            except Exception:
+                pass
             _set_dl(download_id, status='done', downloaded=done,
                     total=total or done, speed=0, name=fname, path=path)
     except Exception as err:
@@ -341,6 +399,25 @@ def api_sources():
          'short': SUPPORTED_SOURCES[sid]['short'], 'default': SUPPORTED_SOURCES[sid]['default']}
         for sid in SOURCE_ORDER
     ])
+
+
+@app.route('/api/settings', methods=['GET', 'POST'])
+def api_settings():
+    if request.method == 'POST':
+        data = request.get_json(force=True, silent=True) or {}
+        download_dir = data.get('download_dir')
+        if not isinstance(download_dir, str) or not download_dir.strip():
+            return jsonify({'error': '请输入下载目录'}), 400
+        download_dir = os.path.abspath(os.path.expanduser(download_dir.strip()))
+        if not os.path.isabs(download_dir):
+            return jsonify({'error': '下载目录必须是绝对路径'}), 400
+        SETTINGS['download_dir'] = download_dir
+        try:
+            with open(SETTINGS_PATH, 'w', encoding='utf-8') as fp:
+                json.dump(SETTINGS, fp, ensure_ascii=False, indent=2)
+        except OSError as err:
+            return jsonify({'error': f'无法保存设置: {err}'}), 500
+    return jsonify({**SETTINGS, 'default_download_dir': DOWNLOAD_DIR})
 
 
 @app.route('/api/search')

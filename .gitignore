@@ -84,6 +84,7 @@ celerybeat-schedule
 # Environments
 .env
 .venv
+examples/claudeai-modern-web-music-player/settings.json
 env/
 venv/
 ENV/
