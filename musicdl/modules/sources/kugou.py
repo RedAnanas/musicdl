@@ -59,7 +59,7 @@ class KugouMusicClient(BaseMusicClient):
     '''_parsewithhaitangwapi'''
     def _parsewithhaitangwapi(self, search_result: dict, request_overrides: dict = None) -> "SongInfo":
         # init
-        request_overrides, file_hash, MUSIC_QUALITIES = request_overrides or {}, search_result.get('hash') or search_result.get('FileHash'), ['hires', 'lossless', 'exhigh']
+        request_overrides, file_hash, MUSIC_QUALITIES = request_overrides or {}, search_result.get('hash') or search_result.get('FileHash'), ['lossless', 'exhigh']
         if not (search_result.get('duration') or search_result.get('Duration') or search_result.get('timelen')): search_result.update(self._getsongmetainfo(song_id=file_hash, request_overrides=request_overrides))
         headers = {"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",}
         # parse
