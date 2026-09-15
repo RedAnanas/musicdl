@@ -27,7 +27,7 @@ from Cryptodome.Cipher import AES, PKCS1_v1_5
 IS_LITE = True
 APPID = 3116 if IS_LITE else 1005
 CLIENTVER = 11440 if IS_LITE else 20489
-MUSIC_QUALITIES = ('viper_tape', 'viper_clear', 'viper_atmos', 'flac', 'high', '320', '128')
+MUSIC_QUALITIES = ('flac', 'high', '320', '128')
 SIGNATURE_WEB_SECRET = "NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt"
 SIGN_KEY_SECRET = "185672dd44712f60bb1736df5a377e82" if IS_LITE else "57ae12eb6890223e355ccfcb74edf70d"
 SIGNATURE_ANDROID_SECRET = "LnT6xpN3khm36zse0QzvmgTZ3waWdRSA" if IS_LITE else "OIlwieks28dk2k092lksi2UIkp"

@@ -33,6 +33,19 @@
 <div class="sourcebar">
   <span class="sourcebar-label">音乐源</span>
   <div class="chips" id="chips"></div>
+  <label class="format-filter">格式
+    <select id="formatFilter">
+      <option value="">全部</option>
+      <option value="mp3">MP3</option>
+      <option value="flac">FLAC</option>
+      <option value="m4a">M4A</option>
+      <option value="aac">AAC</option>
+      <option value="wav">WAV</option>
+      <option value="ape">APE</option>
+      <option value="ogg">OGG</option>
+    </select>
+  </label>
+  <button class="settings-btn" id="settingsBtn" type="button">下载设置</button>
   <span class="sourcebar-hint" id="searchStatus"></span>
 </div>
 
@@ -42,6 +55,7 @@
     <span class="col col-title">曲目</span>
     <span class="col col-album">专辑</span>
     <span class="col col-dur">时长</span>
+    <span class="col col-format">格式</span>
     <span class="col col-size">大小</span>
     <span class="col col-src">来源</span>
     <span class="col col-act"></span>
@@ -56,6 +70,14 @@
     <p>输入关键词，结果会随搜索逐条浮现 —— 不必等待整页加载。</p>
   </div>
 </main>
+
+<aside class="settings-panel" id="settingsPanel" hidden>
+  <div class="settings-head"><span>下载设置</span><button id="settingsClose" aria-label="关闭设置">✕</button></div>
+  <label for="downloadDir">保存目录</label>
+  <input id="downloadDir" type="text" spellcheck="false" placeholder="例如 D:\\Music">
+  <p>下载时会按音乐源建立子目录。</p>
+  <div class="settings-actions"><button id="settingsReset" type="button">恢复默认</button><button id="settingsSave" type="button">保存</button></div>
+</aside>
 
 <!-- Lyrics panel -->
 <aside class="lyrics-panel" id="lyricsPanel">

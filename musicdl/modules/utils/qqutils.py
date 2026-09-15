@@ -49,7 +49,7 @@ class SongFileType(Enum):
     ACC_192 = ("C600", ".m4a")
     ACC_96 = ("C400", ".m4a")
     ACC_48 = ("C200", ".m4a")
-    SORTED_QUALITIES = [("AI00", ".flac"), ("Q000", ".flac"), ("Q001", ".flac"), ("F000", ".flac"), ("O801", ".ogg"), ("O800", ".ogg"), ("O600", ".ogg"), ("O400", ".ogg"), ("M800", ".mp3"), ("M500", ".mp3"), ("C600", ".m4a"), ("C400", ".m4a"), ("C200", ".m4a")]
+    SORTED_QUALITIES = [("F000", ".flac"), ("O801", ".ogg"), ("O800", ".ogg"), ("O600", ".ogg"), ("O400", ".ogg"), ("M800", ".mp3"), ("M500", ".mp3"), ("C600", ".m4a"), ("C400", ".m4a"), ("C200", ".m4a")]
 
 
 '''EncryptedSongFileType'''
@@ -62,7 +62,7 @@ class EncryptedSongFileType(Enum):
     OGG_320 = ("O800", ".mgg")
     OGG_192 = ("O6M0", ".mgg")
     OGG_96 = ("O4M0", ".mgg")
-    SORTED_QUALITIES = [("AIM0", ".mflac"), ("Q0M0", ".mflac"), ("Q0M1", ".mflac"), ("F0M0", ".mflac"), ("O801", ".mgg"), ("O800", ".mgg"), ("O6M0", ".mgg"), ("O4M0", ".mgg")]
+    SORTED_QUALITIES = [("F0M0", ".mflac"), ("O801", ".mgg"), ("O800", ".mgg"), ("O6M0", ".mgg"), ("O4M0", ".mgg")]
 
 
 '''ThirdPartVKeysAPISongFileType'''

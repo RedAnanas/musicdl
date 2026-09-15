@@ -10,6 +10,7 @@ let queue = [];                    // ordered tokens (play order)
 let currentToken = null;
 let searchES = null;
 let sources = [];
+let defaultDownloadDir = '';
 
 /* ------------------------------------------------------------------ */
 /* sources / chips                                                     */
@@ -35,6 +36,27 @@ function activeSources() {
   return [...document.querySelectorAll('.chip.on')].map(c => c.dataset.id);
 }
 
+async function loadSettings() {
+  const settings = await fetch('/api/settings').then(r => r.json());
+  $('#downloadDir').value = settings.download_dir || '';
+  defaultDownloadDir = settings.default_download_dir || '';
+}
+
+$('#settingsBtn').onclick = () => { $('#settingsPanel').hidden = false; };
+$('#settingsClose').onclick = () => { $('#settingsPanel').hidden = true; };
+$('#settingsReset').onclick = () => { $('#downloadDir').value = defaultDownloadDir; };
+$('#settingsSave').onclick = async () => {
+  const response = await fetch('/api/settings', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({download_dir: $('#downloadDir').value}),
+  });
+  const data = await response.json();
+  if (!response.ok) { toast(data.error || '保存失败'); return; }
+  $('#downloadDir').value = data.download_dir;
+  $('#settingsPanel').hidden = true;
+  toast('下载目录已保存');
+};
+
 /* ------------------------------------------------------------------ */
 /* search (real-time SSE stream)                                       */
 /* ------------------------------------------------------------------ */
@@ -52,6 +74,7 @@ function runSearch() {
   $('#searchBtn').disabled = true;
 
   const srcs = activeSources();
+  const format = $('#formatFilter').value;
   const pending = new Set(srcs);
   let count = 0;
   let finished = false;
@@ -63,6 +86,7 @@ function runSearch() {
 
   es.addEventListener('result', (ev) => {
     const t = JSON.parse(ev.data);
+    if (format && t.ext.toLowerCase() !== format) return;
     tracks.set(t.token, t);
     queue.push(t.token);
     addRow(t);
@@ -127,6 +151,7 @@ function addRow(t) {
     </div>
     <div class="r-album">${esc(t.album) || '—'}</div>
     <div class="r-dur">${esc(t.duration) || '—'}</div>
+    <div class="r-format ${t.lossless ? 'lossless' : ''}">${esc(t.format)}</div>
     <div class="r-size ${t.lossless ? 'lossless' : ''}">${esc(t.file_size) || '—'}</div>
     <div class="r-src"><span class="tag">${esc(t.source)}</span></div>
     <div class="r-act">
@@ -437,4 +462,4 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'ArrowLeft' && e.altKey) step(-1);
 });
 
-loadSources();
+Promise.all([loadSources(), loadSettings()]);
