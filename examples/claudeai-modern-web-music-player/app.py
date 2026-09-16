@@ -62,11 +62,12 @@ SOURCE_LABELS = {
     'MiguMusicClient': '咪咕音乐', 'NeteaseMusicClient': '网易云音乐',
     'KuwoMusicClient': '酷我音乐', 'QQMusicClient': 'QQ音乐',
     'KugouMusicClient': '酷狗音乐', 'QianqianMusicClient': '千千音乐',
+    'BilibiliMusicClient': '哔哩哔哩', 'AppleMusicClient': 'Apple Music',
+    'YouTubeMusicClient': 'YouTube 音乐', 'SpotifyMusicClient': 'Spotify',
 }
 SOURCE_ORDER = [
     'NeteaseMusicClient', 'QQMusicClient', 'KuwoMusicClient', 'KugouMusicClient',
-    'MiguMusicClient', 'BilibiliMusicClient', 'AppleMusicClient',
-    'YouTubeMusicClient', 'SpotifyMusicClient',
+    'MiguMusicClient', 'BilibiliMusicClient',
 ]
 missing_sources = [source for source in SOURCE_ORDER if source not in MusicClientBuilder.REGISTERED_MODULES]
 if missing_sources:
