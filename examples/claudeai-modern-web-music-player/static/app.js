@@ -6,11 +6,14 @@
 const $ = (s) => document.querySelector(s);
 const audio = $('#audio');
 const tracks = new Map();          // token -> payload
+const allTracks = new Map();       // token -> all search payloads, including filtered-out rows
 let queue = [];                    // ordered tokens (play order)
 let currentToken = null;
 let searchES = null;
 let sources = [];
 let defaultDownloadDir = '';
+
+const sourceDisplayLabel = (label) => (label || '').replace('音乐', '').trim();
 
 /* ------------------------------------------------------------------ */
 /* sources / chips                                                     */
@@ -24,14 +27,40 @@ async function loadSources() {
     chip.type = 'button';
     chip.className = 'chip' + (src.default ? ' on' : '');
     chip.dataset.id = src.id;
-    chip.innerHTML = `<span class="dot"></span>${src.label}`;
+    chip.innerHTML = `<span class="dot"></span>${sourceDisplayLabel(src.label)}`;
     chip.onclick = () => {
       chip.classList.toggle('on');
       if (!document.querySelectorAll('.chip.on').length) chip.classList.add('on');
     };
     wrap.appendChild(chip);
+    const option = document.createElement('option');
+    option.value = src.id;
+    option.textContent = sourceDisplayLabel(src.label);
+    $('#sourceFilter').appendChild(option);
   });
+  requestAnimationFrame(updateSourcesToggle);
 }
+
+function updateSourcesToggle() {
+  const wrap = $('#chips');
+  const toggle = $('#sourcesToggle');
+  if (!window.matchMedia('(max-width: 600px)').matches) {
+    toggle.hidden = true;
+    return;
+  }
+  toggle.hidden = wrap.scrollHeight <= wrap.clientHeight;
+}
+
+$('#sourcesToggle').onclick = () => {
+  const wrap = $('#chips');
+  const expanded = wrap.classList.toggle('expanded');
+  $('#sourcesToggle').textContent = expanded ? '收起' : '展开';
+  $('#sourcesToggle').setAttribute('aria-expanded', String(expanded));
+};
+window.addEventListener('resize', updateSourcesToggle);
+['formatFilter', 'sourceFilter'].forEach(id => {
+  $(`#${id}`).addEventListener('change', renderFilteredResults);
+});
 function activeSources() {
   return [...document.querySelectorAll('.chip.on')].map(c => c.dataset.id);
 }
@@ -67,14 +96,13 @@ function runSearch() {
   if (!q) return;
   if (searchES) { searchES.close(); searchES = null; }
 
-  tracks.clear(); queue = [];
+  tracks.clear(); allTracks.clear(); queue = [];
   $('#results').innerHTML = '';
   $('#placeholder').hidden = true;
   $('#resultsHead').hidden = false;
   $('#searchBtn').disabled = true;
 
   const srcs = activeSources();
-  const format = $('#formatFilter').value;
   const pending = new Set(srcs);
   let count = 0;
   let finished = false;
@@ -86,10 +114,9 @@ function runSearch() {
 
   es.addEventListener('result', (ev) => {
     const t = JSON.parse(ev.data);
-    if (format && t.ext.toLowerCase() !== format) return;
-    tracks.set(t.token, t);
-    queue.push(t.token);
-    addRow(t);
+    allTracks.set(t.token, t);
+    if (!matchesFilters(t)) return;
+    addVisibleTrack(t);
     count++;
     setStatus(true, `已找到 ${count} 首…`);
   });
@@ -125,6 +152,34 @@ function runSearch() {
   };
 }
 
+function matchesFilters(t) {
+  const format = $('#formatFilter').value;
+  const source = $('#sourceFilter').value;
+  return (!format || t.ext.toLowerCase() === format)
+    && (!source || t.source === (sources.find(item => item.id === source)?.short || ''));
+}
+
+function addVisibleTrack(t) {
+  tracks.set(t.token, t);
+  queue.push(t.token);
+  addRow(t);
+}
+
+function renderFilteredResults() {
+  if (!allTracks.size) return;
+  tracks.clear(); queue = [];
+  $('#results').innerHTML = '';
+  allTracks.forEach(t => { if (matchesFilters(t)) addVisibleTrack(t); });
+  const count = tracks.size;
+  $('#resultsHead').hidden = count === 0;
+  $('#placeholder').hidden = count !== 0;
+  if (count === 0) {
+    $('#placeholder').querySelector('h2').textContent = '没有匹配的结果';
+    $('#placeholder').querySelector('p').textContent = '调整格式或来源筛选后再试。';
+  }
+  setStatus(Boolean(searchES), searchES ? `已找到 ${count} 首…` : (count ? `共 ${count} 首` : ''));
+}
+
 function setStatus(busy, text) {
   const el = $('#searchStatus');
   el.innerHTML = (busy ? '<span class="spin"></span>' : '') + (text || '');
@@ -153,7 +208,15 @@ function addRow(t) {
     <div class="r-dur">${esc(t.duration) || '—'}</div>
     <div class="r-format ${t.lossless ? 'lossless' : ''}">${esc(t.format)}</div>
     <div class="r-size ${t.lossless ? 'lossless' : ''}">${esc(t.file_size) || '—'}</div>
-    <div class="r-src"><span class="tag">${esc(t.source)}</span></div>
+    <div class="r-src"><span class="tag">${esc(sourceDisplayLabel(t.source_label || t.source))}</span></div>
+    <div class="r-mobile-details">
+      <span class="r-mobile-album">专辑：${esc(t.album) || '—'}</span>
+      <span class="r-mobile-meta">
+        <span>${esc(t.duration) || '—'}</span>
+        <span class="r-mobile-quality ${t.lossless ? 'lossless' : ''}">${esc(t.format) || '—'} · ${esc(t.file_size) || '—'}</span>
+        <span>${esc(sourceDisplayLabel(t.source_label || t.source))}</span>
+      </span>
+    </div>
     <div class="r-act">
       <button class="a-play" title="播放">${ICON_PLAY}</button>
       <button class="a-dl" title="下载">${ICON_DL}</button>
@@ -378,7 +441,33 @@ let dlCount = 0;
 const fab = document.createElement('button');
 fab.className = 'dl-fab'; fab.title = '下载列表';
 fab.innerHTML = `${ICON_DL}<span class="badge">0</span>`;
-fab.onclick = () => { $('#dlDrawer').classList.toggle('open'); $('#lyricsPanel').classList.remove('open'); };
+let fabStartY = 0, fabStartBottom = 0, fabMoved = false, suppressFabClick = false;
+fab.onclick = () => {
+  if (suppressFabClick) { suppressFabClick = false; return; }
+  $('#dlDrawer').classList.toggle('open'); $('#lyricsPanel').classList.remove('open');
+};
+fab.addEventListener('pointerdown', (e) => {
+  fabStartY = e.clientY;
+  fabStartBottom = parseFloat(getComputedStyle(fab).bottom);
+  fabMoved = false;
+  fab.setPointerCapture(e.pointerId);
+  fab.classList.add('dragging');
+});
+fab.addEventListener('pointermove', (e) => {
+  if (!fab.hasPointerCapture(e.pointerId)) return;
+  const delta = e.clientY - fabStartY;
+  if (Math.abs(delta) > 4) fabMoved = true;
+  const minBottom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--player-h')) + 12;
+  const maxBottom = window.innerHeight - fab.offsetHeight - 12;
+  fab.style.bottom = `${Math.min(maxBottom, Math.max(minBottom, fabStartBottom - delta))}px`;
+});
+fab.addEventListener('pointerup', (e) => {
+  if (!fab.hasPointerCapture(e.pointerId)) return;
+  fab.releasePointerCapture(e.pointerId);
+  fab.classList.remove('dragging');
+  suppressFabClick = fabMoved;
+});
+fab.addEventListener('pointercancel', () => fab.classList.remove('dragging'));
 document.body.appendChild(fab);
 $('#dlClose').onclick = () => $('#dlDrawer').classList.remove('open');
 

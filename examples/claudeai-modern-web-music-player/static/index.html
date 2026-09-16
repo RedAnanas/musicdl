@@ -33,18 +33,26 @@
 <div class="sourcebar">
   <span class="sourcebar-label">音乐源</span>
   <div class="chips" id="chips"></div>
-  <label class="format-filter">格式
-    <select id="formatFilter">
-      <option value="">全部</option>
-      <option value="mp3">MP3</option>
-      <option value="flac">FLAC</option>
-      <option value="m4a">M4A</option>
-      <option value="aac">AAC</option>
-      <option value="wav">WAV</option>
-      <option value="ape">APE</option>
-      <option value="ogg">OGG</option>
-    </select>
-  </label>
+  <button class="sources-toggle" id="sourcesToggle" type="button" hidden aria-expanded="false">展开</button>
+  <div class="filters">
+    <label class="format-filter">格式
+      <select id="formatFilter">
+        <option value="">全部</option>
+        <option value="mp3">MP3</option>
+        <option value="flac">FLAC</option>
+        <option value="m4a">M4A</option>
+        <option value="aac">AAC</option>
+        <option value="wav">WAV</option>
+        <option value="ape">APE</option>
+        <option value="ogg">OGG</option>
+      </select>
+    </label>
+    <label class="source-filter">来源
+      <select id="sourceFilter">
+        <option value="">全部来源</option>
+      </select>
+    </label>
+  </div>
   <button class="settings-btn" id="settingsBtn" type="button">下载设置</button>
   <span class="sourcebar-hint" id="searchStatus"></span>
 </div>
