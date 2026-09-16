@@ -1,9 +1,10 @@
 # Docker 部署 Web 前端
 
-此配置只启动 `claudeai-modern-web-music-player` Flask Web 前端，默认映射到宿主机 5000 端口。
+此配置只启动 `claudeai-modern-web-music-player` Flask Web 前端，默认拉取 `redananas/musicdl:latest` 并映射到宿主机 5000 端口。
 
 ```powershell
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 打开 `http://127.0.0.1:5000/`。下载目录默认是容器内的 `/Media/musicdl`，对应飞牛的 `/vol2/1000/Media/musicdl`；媒体盘以 `/vol2/1000/Media:/Media` 挂载到容器，容器可访问整个媒体库。下载内容与下载目录设置保存到项目根目录的 `data/`，不会写入镜像；其中可能包含个人路径，不应提交到 Git。
@@ -15,6 +16,12 @@ MUSICDL_DOWNLOAD_DIR=/Media/音乐/下载
 ```
 
 修改后执行 `docker compose up -d`。路径必须以容器内的 `/Media/` 开头；例如 `/Media/电影/原声` 对应飞牛的 `/vol2/1000/Media/电影/原声`。
+
+如需临时使用其他镜像标签，可在 `.env` 中设置 `MUSICDL_IMAGE`，例如：
+
+```text
+MUSICDL_IMAGE=redananas/musicdl:sha-4809b26
+```
 
 常用命令：
 

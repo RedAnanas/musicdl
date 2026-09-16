@@ -1,6 +1,6 @@
 services:
   musicdl-web:
-    build: .
+    image: ${MUSICDL_IMAGE:-redananas/musicdl:latest}
     container_name: musicdl-web
     ports:
       - "5000:5000"
