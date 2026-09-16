@@ -20,7 +20,7 @@
     </div>
     <div class="brand-text">
       <h1>声轨</h1>
-      <p>Soundtrack · powered by musicdl</p>
+      <p>Soundtrack · musicdl <span id="appVersion"></span></p>
     </div>
   </div>
 
@@ -82,10 +82,15 @@
 
 <aside class="settings-panel" id="settingsPanel" hidden>
   <div class="settings-head"><span>下载设置</span><button id="settingsClose" aria-label="关闭设置">✕</button></div>
-  <label for="downloadDir">保存目录</label>
-  <input id="downloadDir" type="text" spellcheck="false" placeholder="例如 D:\\Music">
-  <p>下载时会按音乐源建立子目录。</p>
+  <div class="directory-config-head"><span>目录配置</span><button id="directoryAdd" type="button">添加目录</button></div>
+  <div id="directoryConfigs"></div>
+  <p>下载时先选择目录，再按音乐源建立子目录。</p>
   <div class="settings-actions"><button id="settingsReset" type="button">恢复默认</button><button id="settingsSave" type="button">保存</button></div>
+</aside>
+
+<aside class="directory-picker" id="directoryPicker" hidden>
+  <div class="settings-head"><span>选择下载目录</span><button id="directoryPickerClose" aria-label="关闭目录选择">✕</button></div>
+  <div id="directoryChoices"></div>
 </aside>
 
 <!-- Lyrics panel -->

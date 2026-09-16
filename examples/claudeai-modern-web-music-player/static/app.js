@@ -11,7 +11,7 @@ let queue = [];                    // ordered tokens (play order)
 let currentToken = null;
 let searchES = null;
 let sources = [];
-let defaultDownloadDir = '';
+let downloadDirectories = [];
 
 const sourceDisplayLabel = (label) => (label || '').replace('音乐', '').trim();
 
@@ -67,21 +67,49 @@ function activeSources() {
 
 async function loadSettings() {
   const settings = await fetch('/api/settings').then(r => r.json());
-  $('#downloadDir').value = settings.download_dir || '';
-  defaultDownloadDir = settings.default_download_dir || '';
+  downloadDirectories = settings.download_directories || [];
+  renderDirectoryConfigs();
+}
+
+async function loadVersion() {
+  try {
+    const data = await fetch('/api/version').then(r => r.json());
+    $('#appVersion').textContent = data.version ? `v${data.version}` : '';
+  } catch {
+    $('#appVersion').textContent = '';
+  }
+}
+
+function renderDirectoryConfigs() {
+  const wrap = $('#directoryConfigs');
+  wrap.innerHTML = '';
+  downloadDirectories.forEach((directory, index) => {
+    const row = document.createElement('div');
+    row.className = 'directory-config';
+    row.innerHTML = `<input data-field="name" value="${esc(directory.name)}" placeholder="名称，例如华语"><input data-field="path" value="${esc(directory.path)}" placeholder="例如 D:\\华语歌曲"><button type="button" aria-label="删除目录">×</button>`;
+    row.querySelectorAll('input').forEach(input => input.oninput = () => {
+      downloadDirectories[index][input.dataset.field] = input.value;
+    });
+    row.querySelector('button').onclick = () => {
+      downloadDirectories.splice(index, 1);
+      renderDirectoryConfigs();
+    };
+    wrap.appendChild(row);
+  });
 }
 
 $('#settingsBtn').onclick = () => { $('#settingsPanel').hidden = false; };
 $('#settingsClose').onclick = () => { $('#settingsPanel').hidden = true; };
-$('#settingsReset').onclick = () => { $('#downloadDir').value = defaultDownloadDir; };
+$('#settingsReset').onclick = () => { downloadDirectories = []; renderDirectoryConfigs(); };
+$('#directoryAdd').onclick = () => { downloadDirectories.push({name: '', path: ''}); renderDirectoryConfigs(); };
 $('#settingsSave').onclick = async () => {
   const response = await fetch('/api/settings', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({download_dir: $('#downloadDir').value}),
+    body: JSON.stringify({download_directories: downloadDirectories}),
   });
   const data = await response.json();
   if (!response.ok) { toast(data.error || '保存失败'); return; }
-  $('#downloadDir').value = data.download_dir;
+  downloadDirectories = data.download_directories || [];
   $('#settingsPanel').hidden = true;
   toast('下载目录已保存');
 };
@@ -474,11 +502,36 @@ $('#dlClose').onclick = () => $('#dlDrawer').classList.remove('open');
 async function startDownload(token, btn) {
   const t = tracks.get(token);
   if (!t) return;
+  if (!downloadDirectories.length) { toast('请先在下载设置中添加下载目录'); return; }
+  showDirectoryPicker(token, btn);
+}
+
+function showDirectoryPicker(token, btn) {
+  const choices = $('#directoryChoices');
+  choices.innerHTML = '';
+  downloadDirectories.forEach(directory => {
+    const choice = document.createElement('button');
+    choice.type = 'button'; choice.className = 'directory-choice';
+    choice.innerHTML = `${esc(directory.name)}<small>${esc(directory.path)}</small>`;
+    choice.onclick = () => {
+      $('#directoryPicker').hidden = true;
+      startDownloadToDirectory(token, btn, directory.name);
+    };
+    choices.appendChild(choice);
+  });
+  $('#directoryPicker').hidden = false;
+}
+
+$('#directoryPickerClose').onclick = () => { $('#directoryPicker').hidden = true; };
+
+async function startDownloadToDirectory(token, btn, directoryName) {
+  const t = tracks.get(token);
+  if (!t) return;
   if (btn) btn.classList.add('busy');
   try {
     const res = await fetch('/api/download', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token })
+      body: JSON.stringify({ token, directory_name: directoryName })
     }).then(r => r.json());
     if (res.error) { toast(res.error); if (btn) btn.classList.remove('busy'); return; }
     const item = addDlItem(t);
@@ -551,4 +604,4 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'ArrowLeft' && e.altKey) step(-1);
 });
 
-Promise.all([loadSources(), loadSettings()]);
+Promise.all([loadSources(), loadSettings(), loadVersion()]);
