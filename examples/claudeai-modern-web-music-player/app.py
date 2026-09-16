@@ -23,7 +23,7 @@ import requests
 from pathlib import Path
 from flask import Flask, request, Response, jsonify, send_from_directory, stream_with_context
 
-from musicdl import musicdl
+from musicdl import __version__, musicdl
 from musicdl.modules import MusicClientBuilder, SongInfoUtils
 from musicdl.modules.utils.neteaseutils import MUSIC_QUALITIES
 
@@ -42,15 +42,25 @@ SETTINGS_PATH = os.path.abspath(os.path.expanduser(
 
 
 def _load_settings():
+    settings = {'download_directories': []}
     try:
         with open(SETTINGS_PATH, 'r', encoding='utf-8') as fp:
             saved = json.load(fp)
-        path = saved.get('download_dir')
-        if isinstance(path, str) and os.path.isabs(path):
-            return {'download_dir': os.path.abspath(os.path.expanduser(path))}
+        directories = saved.get('download_directories')
+        if isinstance(directories, list):
+            for directory in directories:
+                if not isinstance(directory, dict):
+                    continue
+                name = directory.get('name')
+                path = directory.get('path')
+                if isinstance(name, str) and name.strip() and isinstance(path, str) and os.path.isabs(path):
+                    settings['download_directories'].append({
+                        'name': name.strip(),
+                        'path': os.path.abspath(os.path.expanduser(path.strip())),
+                    })
     except (OSError, ValueError, TypeError):
         pass
-    return {'download_dir': DOWNLOAD_DIR}
+    return settings
 
 
 SETTINGS = _load_settings()
@@ -313,7 +323,7 @@ def _embed_metadata(song):
                                     overwrite=False, cover_source=cover)
 
 
-def run_download(download_id, token):
+def run_download(download_id, token, download_dir):
     entry = REGISTRY.get(token)
     if not entry:
         _set_dl(download_id, status='error', message='曲目已过期，请重新搜索')
@@ -325,7 +335,7 @@ def run_download(download_id, token):
         return
 
     source = entry['source']
-    sub = os.path.join(SETTINGS['download_dir'], SUPPORTED_SOURCES.get(source, {}).get('short', source))
+    sub = os.path.join(download_dir, SUPPORTED_SOURCES.get(source, {}).get('short', source))
     os.makedirs(sub, exist_ok=True)
     ext = (str(song.ext) or 'mp3').lstrip('.')
     fname = f"{_safe_name(str(song.song_name))} - {_safe_name(str(song.singers))}.{ext}"
@@ -406,23 +416,44 @@ def api_sources():
     ])
 
 
+@app.route('/api/version')
+def api_version():
+    return jsonify({'version': __version__})
+
+
 @app.route('/api/settings', methods=['GET', 'POST'])
 def api_settings():
     if request.method == 'POST':
         data = request.get_json(force=True, silent=True) or {}
-        download_dir = data.get('download_dir')
-        if not isinstance(download_dir, str) or not download_dir.strip():
-            return jsonify({'error': '请输入下载目录'}), 400
-        download_dir = os.path.abspath(os.path.expanduser(download_dir.strip()))
-        if not os.path.isabs(download_dir):
-            return jsonify({'error': '下载目录必须是绝对路径'}), 400
-        SETTINGS['download_dir'] = download_dir
+        directories = data.get('download_directories', [])
+        if not isinstance(directories, list):
+            return jsonify({'error': '目录配置格式错误'}), 400
+        normalized = []
+        names = set()
+        for directory in directories:
+            if not isinstance(directory, dict):
+                return jsonify({'error': '目录配置格式错误'}), 400
+            name = directory.get('name')
+            path = directory.get('path')
+            if not isinstance(name, str) or not name.strip() or not isinstance(path, str) or not path.strip():
+                return jsonify({'error': '目录名称和路径均不能为空'}), 400
+            name = name.strip()
+            path = os.path.abspath(os.path.expanduser(path.strip()))
+            if not os.path.isabs(path):
+                return jsonify({'error': '目录路径必须是绝对路径'}), 400
+            if name in names:
+                return jsonify({'error': '目录名称不能重复'}), 400
+            names.add(name)
+            normalized.append({'name': name, 'path': path})
+        if not normalized:
+            return jsonify({'error': '请至少添加一个下载目录'}), 400
+        SETTINGS['download_directories'] = normalized
         try:
             with open(SETTINGS_PATH, 'w', encoding='utf-8') as fp:
                 json.dump(SETTINGS, fp, ensure_ascii=False, indent=2)
         except OSError as err:
             return jsonify({'error': f'无法保存设置: {err}'}), 500
-    return jsonify({**SETTINGS, 'default_download_dir': DOWNLOAD_DIR})
+    return jsonify(SETTINGS)
 
 
 @app.route('/api/search')
@@ -523,10 +554,16 @@ def api_download():
     entry = REGISTRY.get(token)
     if not entry:
         return jsonify({'error': '曲目已过期，请重新搜索'}), 404
+    directory_name = data.get('directory_name')
+    directory = next((item for item in SETTINGS['download_directories']
+                      if item['name'] == directory_name), None)
+    if not directory:
+        return jsonify({'error': '请选择下载目录'}), 400
+    download_dir = directory['path']
     download_id = uuid.uuid4().hex[:16]
     _set_dl(download_id, status='starting', downloaded=0, total=0,
             name=str(entry['song_info'].song_name))
-    threading.Thread(target=run_download, args=(download_id, token), daemon=True).start()
+    threading.Thread(target=run_download, args=(download_id, token, download_dir), daemon=True).start()
     return jsonify({'download_id': download_id})
 
 

@@ -144,7 +144,7 @@ class MusicClient():
 
 '''MusicClientCMD'''
 @click.command()
-@click.version_option()
+@click.version_option(version=__version__)
 @click.option('-k', '--keyword', default=None, help='The keywords for the music search. If left empty, an interactive terminal will open automatically.', type=str, show_default=True)
 @click.option('-p', '--playlist-url', '--playlist_url', default=None, help='Given a playlist URL, e.g., "https://music.163.com/#/playlist?id=7583298906", musicdl automatically parses the playlist and downloads all tracks in it.', type=str, show_default=True)
 @click.option('-m', '--music-sources', '--music_sources', default=','.join(DEFAULT_MUSIC_SOURCES), help='The music search and download sources.', type=str, show_default=True)
