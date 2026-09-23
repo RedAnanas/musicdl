@@ -5,7 +5,7 @@ __description__ = 'Musicdl: A lightweight music downloader written in pure pytho
 '''url'''
 __url__ = 'https://github.com/CharlesPikachu/musicdl'
 '''version'''
-__version__ = '1.0.1'
+__version__ = '1.0.2'
 __upstream_version__ = '2.13.11'
 '''author'''
 __author__ = 'Zhenchao Jin'
