@@ -17,7 +17,10 @@ import re
 import time
 import uuid
 import json
+import hashlib
 import queue
+import shutil
+import tempfile
 import threading
 import requests
 from pathlib import Path
@@ -299,6 +302,7 @@ def _drain(buckets, cursors, source, seen, lock, emit):
 DOWNLOADS = {}
 DL_LOCK = threading.Lock()
 ACTIVE_DOWNLOAD_PATHS = set()
+V1_STAGING_DIR = os.path.join(tempfile.gettempdir(), 'musicdl-v1-downloads')
 
 
 def _safe_name(name):
@@ -324,7 +328,7 @@ def _embed_metadata(song):
                                     overwrite=False, cover_source=cover)
 
 
-def run_download(download_id, token, download_dir):
+def run_download(download_id, token, download_dir, v1=False):
     entry = REGISTRY.get(token)
     if not entry:
         _set_dl(download_id, status='error', message='曲目已过期，请重新搜索')
@@ -337,7 +341,12 @@ def run_download(download_id, token, download_dir):
 
     os.makedirs(download_dir, exist_ok=True)
     ext = (str(song.ext) or 'mp3').lstrip('.')
+    if v1 and ext.lower() not in RESULT_EXT_TO_MIME:
+        _set_dl(download_id, status='error', message='不支持的音频格式')
+        return
     fname = f"{_safe_name(str(song.song_name))} - {_safe_name(str(song.singers))}.{ext}"
+    if v1:
+        fname = re.sub(r'[\x00-\x1f\x7f]', '_', fname)
     with DL_LOCK:
         path = os.path.join(download_dir, fname)
         suffix = 2
@@ -378,13 +387,27 @@ def run_download(download_id, token, download_dir):
                 _embed_metadata(song)
             except Exception:
                 pass
-            _set_dl(download_id, status='done', downloaded=done,
-                    total=total or done, speed=0, name=fname, path=path)
+            fields = {'status': 'done', 'downloaded': done,
+                      'total': total or done, 'speed': 0, 'name': fname, 'path': path}
+            if v1:
+                digest = hashlib.sha256()
+                with open(path, 'rb') as fp:
+                    for chunk in iter(lambda: fp.read(1024 * 1024), b''):
+                        digest.update(chunk)
+                fields['checksum_sha256'] = digest.hexdigest()
+            _set_dl(download_id, **fields)
     except Exception as err:
         _set_dl(download_id, status='error', message=str(err))
     finally:
         with DL_LOCK:
             ACTIVE_DOWNLOAD_PATHS.discard(path)
+
+
+def run_v1_download(download_id, token, task_dir):
+    try:
+        run_download(download_id, token, task_dir, v1=True)
+    except Exception as err:
+        _set_dl(download_id, status='error', message=str(err))
 
 
 def _set_dl(download_id, **fields):
@@ -598,10 +621,62 @@ def api_download_progress(download_id):
 @app.route('/api/file/<download_id>')
 def api_file(download_id):
     rec = _get_dl(download_id)
-    if not rec or rec.get('status') != 'done' or not rec.get('path'):
+    if not rec or rec.get('v1') or rec.get('status') != 'done' or not rec.get('path'):
         return 'not ready', 404
     path = rec['path']
     return send_from_directory(os.path.dirname(path), os.path.basename(path), as_attachment=True)
+
+
+@app.route('/api/v1/downloads', methods=['POST', 'OPTIONS'])
+def api_v1_downloads():
+    if request.method == 'OPTIONS':
+        return '', 204
+    data = request.get_json(silent=True) or {}
+    token = data.get('token') if isinstance(data, dict) else None
+    entry = REGISTRY.get(token) if isinstance(token, str) else None
+    if not entry:
+        return jsonify({'error': '曲目已过期，请重新搜索'}), 404
+    download_id = uuid.uuid4().hex
+    os.makedirs(V1_STAGING_DIR, exist_ok=True)
+    task_dir = tempfile.mkdtemp(prefix=f'{download_id}-', dir=V1_STAGING_DIR)
+    _set_dl(download_id, v1=True, task_dir=task_dir, status='starting')
+    threading.Thread(target=run_v1_download,
+                     args=(download_id, token, task_dir), daemon=True).start()
+    return jsonify({'download_id': download_id})
+
+
+@app.route('/api/v1/downloads/<download_id>')
+def api_v1_download_status(download_id):
+    rec = _get_dl(download_id)
+    if not rec.get('v1'):
+        return jsonify({'error': '任务不存在'}), 404
+    result = {'status': rec['status']}
+    if rec['status'] == 'done':
+        result.update(filename=os.path.basename(rec['name']),
+                      checksum_sha256=rec['checksum_sha256'])
+    elif rec['status'] == 'error':
+        result['message'] = rec.get('message', '下载失败')
+    return jsonify(result)
+
+
+@app.route('/api/v1/downloads/<download_id>/file', methods=['GET', 'DELETE'])
+def api_v1_download_file(download_id):
+    rec = _get_dl(download_id)
+    if not rec.get('v1'):
+        return jsonify({'error': '任务不存在'}), 404
+    if request.method == 'DELETE':
+        if rec['status'] not in ('done', 'error'):
+            return jsonify({'error': '下载尚未结束'}), 409
+        task_dir = rec['task_dir']
+        if os.path.dirname(os.path.realpath(task_dir)) != os.path.realpath(V1_STAGING_DIR):
+            return jsonify({'error': '暂存目录无效'}), 500
+        shutil.rmtree(task_dir)
+        with DL_LOCK:
+            DOWNLOADS.pop(download_id, None)
+        return jsonify({'deleted': True})
+    if rec['status'] != 'done':
+        return jsonify({'error': '文件尚未就绪'}), 404
+    return send_from_directory(rec['task_dir'], rec['name'], as_attachment=True)
 
 
 if __name__ == '__main__':
