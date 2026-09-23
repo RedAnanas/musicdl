@@ -298,6 +298,7 @@ def _drain(buckets, cursors, source, seen, lock, emit):
 # ---------------------------------------------------------------------------
 DOWNLOADS = {}
 DL_LOCK = threading.Lock()
+ACTIVE_DOWNLOAD_PATHS = set()
 
 
 def _safe_name(name):
@@ -334,12 +335,17 @@ def run_download(download_id, token, download_dir):
         _set_dl(download_id, status='error', message='该曲目没有可用的下载地址')
         return
 
-    source = entry['source']
-    sub = os.path.join(download_dir, SUPPORTED_SOURCES.get(source, {}).get('short', source))
-    os.makedirs(sub, exist_ok=True)
+    os.makedirs(download_dir, exist_ok=True)
     ext = (str(song.ext) or 'mp3').lstrip('.')
     fname = f"{_safe_name(str(song.song_name))} - {_safe_name(str(song.singers))}.{ext}"
-    path = os.path.join(sub, fname)
+    with DL_LOCK:
+        path = os.path.join(download_dir, fname)
+        suffix = 2
+        while os.path.exists(path) or path in ACTIVE_DOWNLOAD_PATHS:
+            path = os.path.join(download_dir, f"{os.path.splitext(fname)[0]} ({suffix}).{ext}")
+            suffix += 1
+        ACTIVE_DOWNLOAD_PATHS.add(path)
+    fname = os.path.basename(path)
 
     try:
         with requests.get(url, headers=entry['headers'], cookies=entry['cookies'],
@@ -367,7 +373,7 @@ def run_download(download_id, token, download_dir):
                         last, last_bytes = now, done
             os.replace(tmp, path)
             song._save_path = path
-            song.work_dir = sub
+            song.work_dir = download_dir
             try:
                 _embed_metadata(song)
             except Exception:
@@ -376,6 +382,9 @@ def run_download(download_id, token, download_dir):
                     total=total or done, speed=0, name=fname, path=path)
     except Exception as err:
         _set_dl(download_id, status='error', message=str(err))
+    finally:
+        with DL_LOCK:
+            ACTIVE_DOWNLOAD_PATHS.discard(path)
 
 
 def _set_dl(download_id, **fields):
