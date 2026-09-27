@@ -23,12 +23,14 @@ import shutil
 import tempfile
 import threading
 import requests
+from html import unescape
 from pathlib import Path
+from urllib.parse import parse_qs, urljoin, urlparse
 from flask import Flask, request, Response, jsonify, send_from_directory, stream_with_context
 
 from musicdl import __version__, musicdl
 from musicdl.modules import MusicClientBuilder, SongInfoUtils
-from musicdl.modules.utils.neteaseutils import MUSIC_QUALITIES
+from musicdl.modules.utils.neteaseutils import MUSIC_QUALITIES, DEFAULT_COOKIES
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +158,8 @@ class TrackRegistry:
 
 
 REGISTRY = TrackRegistry()
+LINK_JOBS = {}
+LINK_JOBS_LOCK = threading.Lock()
 
 
 class _NullProgress:
@@ -187,6 +191,124 @@ def _track_payload(song_info, token):
         'has_lyric': bool(getattr(song_info, 'lyric', None)),
         'lossless': ext in {'flac', 'wav', 'ape', 'alac'},
     }
+
+
+LINK_SOURCES = {
+    'music.163.com': 'NeteaseMusicClient',
+    'y.music.163.com': 'NeteaseMusicClient',
+    'm.music.163.com': 'NeteaseMusicClient',
+    '3g.music.163.com': 'NeteaseMusicClient',
+    'y.qq.com': 'QQMusicClient',
+    'i.y.qq.com': 'QQMusicClient',
+    'i2.y.qq.com': 'QQMusicClient',
+    'm.y.qq.com': 'QQMusicClient',
+    'c.y.qq.com': 'QQMusicClient',
+    'c6.y.qq.com': 'QQMusicClient',
+    'music.qq.com': 'QQMusicClient',
+    'www.kugou.com': 'KugouMusicClient',
+    'm.kugou.com': 'KugouMusicClient',
+    'kugou.com': 'KugouMusicClient',
+    'h5.kugou.com': 'KugouMusicClient',
+    'www.kuwo.cn': 'KuwoMusicClient',
+    'm.kuwo.cn': 'KuwoMusicClient',
+    'kuwo.cn': 'KuwoMusicClient',
+    'mobile.kuwo.cn': 'KuwoMusicClient',
+}
+
+
+def resolve_music_link(url, progress_callback=None):
+    raw = unescape(url.strip()).replace('\\&', '&')
+    match = re.search(r'https?://[^\s<>]+', raw)
+    if not match:
+        raise ValueError('请输入音乐平台的歌单或歌曲链接')
+    parsed = urlparse(match.group(0).rstrip('.,，。)]}>'))
+    short_source = {'163cn.tv': 'NeteaseMusicClient', 'c6.y.qq.com': 'QQMusicClient'}.get((parsed.hostname or '').lower())
+    source = LINK_SOURCES.get((parsed.hostname or '').lower()) or short_source
+    if parsed.scheme not in ('http', 'https') or not source or parsed.username or parsed.password or parsed.port not in (None, 443, 80):
+        raise ValueError('仅支持网易云、QQ 音乐、酷狗和酷我的歌单或歌曲链接')
+    url = parsed._replace(scheme='https', netloc=parsed.hostname).geturl()
+    if parsed.hostname == '163cn.tv' or (parsed.hostname == 'c6.y.qq.com' and parsed.path == '/base/fcgi-bin/u'):
+        for _ in range(3):
+            response = requests.get(url, allow_redirects=False, stream=True, timeout=10)
+            try:
+                location = response.headers.get('Location')
+            finally:
+                response.close()
+            if response.status_code not in (301, 302, 303, 307, 308) or not location:
+                raise ValueError('音乐分享短链未返回有效跳转地址')
+            url = urljoin(url, location)
+            parsed = urlparse(url)
+            redirect_source = LINK_SOURCES.get((parsed.hostname or '').lower()) or {'163cn.tv': 'NeteaseMusicClient'}.get((parsed.hostname or '').lower())
+            if (parsed.scheme != 'https' or parsed.username or parsed.password or parsed.port not in (None, 443)
+                    or redirect_source != source):
+                raise ValueError('音乐分享短链跳转到了不支持的地址')
+            if parsed.hostname not in ('163cn.tv', 'c6.y.qq.com'):
+                break
+        else:
+            raise ValueError('音乐分享短链跳转次数过多')
+    path = (parsed.fragment.split('?', 1)[0] if parsed.fragment.startswith('/') else parsed.path).strip('/')
+    query = parse_qs(parsed.query)
+    if '?' in parsed.fragment:
+        query.update(parse_qs(parsed.fragment.split('?', 1)[1]))
+    elif '=' in parsed.fragment:
+        query.update(parse_qs(parsed.fragment))
+    path_lower = path.lower()
+    kind = 'playlist' if any(part in path_lower for part in ('playlist', 'special/single', 'taoge')) else 'song'
+    allowed_paths = {
+        'NeteaseMusicClient': ('playlist', 'song'),
+        'QQMusicClient': ('playlist', 'songdetail', 'song', 'taoge'),
+        'KugouMusicClient': ('special/single', 'song'),
+        'KuwoMusicClient': ('playlist', 'play_detail', 'yinyue'),
+    }
+    if not any(part in path_lower for part in allowed_paths[source]):
+        raise ValueError('无法识别该平台的歌单或歌曲链接')
+    client = MANAGER.client(source)
+    if kind == 'playlist':
+        if source == 'QQMusicClient':
+            playlist_id = (query.get('id') or [path.rsplit('/', 1)[-1]])[0]
+            if not re.fullmatch(r'\d{1,20}', playlist_id):
+                raise ValueError('无法识别 QQ 音乐歌单 ID')
+            canonical_url = f'https://y.qq.com/n/ryqq/playlist/{playlist_id}'
+        else:
+            canonical_url = url
+        if progress_callback and source in ('QQMusicClient', 'NeteaseMusicClient'):
+            tracks = []
+            seen = set()
+            def report(song, processed, total):
+                identifier = getattr(song, 'identifier', None) if song else None
+                track = None
+                if song and identifier not in seen:
+                    seen.add(identifier)
+                    track = _track_payload(song, REGISTRY.add(song, source))
+                if track: tracks.append(track)
+                progress_callback(track, processed, total)
+            client.parseplaylist(canonical_url, progress_callback=report)
+            return tracks
+        songs = client.parseplaylist(canonical_url)
+    else:
+        song_id = (query.get('songmid') or query.get('mid') or query.get('id') or [path.rsplit('/', 1)[-1]])[0].removesuffix('.html')
+        if source == 'KugouMusicClient':
+            song_id = (query.get('hash') or [song_id])[0]
+        if not re.fullmatch(r'[A-Za-z0-9]{1,64}', song_id):
+            raise ValueError('无法识别歌曲链接中的曲目 ID')
+        field = {'NeteaseMusicClient': 'id', 'QQMusicClient': 'mid',
+                 'KugouMusicClient': 'hash', 'KuwoMusicClient': 'musicrid'}[source]
+        info = {field: song_id, **(client._getsongmetainfo(song_id) or {})}
+        song_flac = client._parsewiththirdpartapis(search_result=info) if source == 'NeteaseMusicClient' else None
+        try:
+            if source == 'NeteaseMusicClient':
+                lossless_quality_is_sufficient = not (client.default_cookies and client.default_cookies != DEFAULT_COOKIES)
+                song = client._parsewithofficialapiv1(search_result=info, song_info_flac=song_flac,
+                                                       lossless_quality_is_sufficient=lossless_quality_is_sufficient)
+            else:
+                song = client._parsewithofficialapiv1(search_result=info)
+        except Exception:
+            song = None
+        if not song or not song.with_valid_download_url:
+            song = song_flac if song_flac else client._parsewiththirdpartapis(search_result=info)
+        songs = [song]
+    return [_track_payload(song, REGISTRY.add(song, source)) for song in songs
+            if song.with_valid_download_url]
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +628,49 @@ def api_search():
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/resolve-link', methods=['POST'])
+def api_resolve_link():
+    url = (request.get_json(silent=True) or {}).get('url', '')
+    if not isinstance(url, str) or len(url) > 2048:
+        return jsonify({'error': '请输入有效的音乐链接'}), 400
+    job_id = uuid.uuid4().hex[:16]
+    with LINK_JOBS_LOCK:
+        now = time.time()
+        for old_id, old_job in list(LINK_JOBS.items()):
+            if old_job['status'] != 'resolving' and now - old_job['created_at'] > 3600:
+                del LINK_JOBS[old_id]
+        LINK_JOBS[job_id] = {'status': 'resolving', 'tracks': [], 'processed': 0,
+                             'total': 0, 'message': '', 'created_at': now}
+
+    def run():
+        def report(track, processed, total):
+            with LINK_JOBS_LOCK:
+                job = LINK_JOBS[job_id]
+                if track: job['tracks'].append(track)
+                job.update(processed=processed, total=total)
+        try:
+            tracks = resolve_music_link(url, report)
+            with LINK_JOBS_LOCK:
+                job = LINK_JOBS[job_id]
+                job.update(status='completed' if tracks else 'error', tracks=tracks,
+                           processed=job['processed'] or len(tracks), total=job['total'] or len(tracks),
+                           message='' if tracks else '没有找到可下载的曲目')
+        except ValueError as err:
+            with LINK_JOBS_LOCK: LINK_JOBS[job_id].update(status='error', message=str(err))
+        except Exception:
+            with LINK_JOBS_LOCK: LINK_JOBS[job_id].update(status='error', message='链接解析失败，请检查链接或稍后重试')
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({'job_id': job_id}), 202
+
+
+@app.route('/api/resolve-link/<job_id>')
+def api_resolve_link_status(job_id):
+    with LINK_JOBS_LOCK:
+        job = LINK_JOBS.get(job_id)
+        return (jsonify(job), 200) if job else (jsonify({'error': '解析任务不存在'}), 404)
 
 
 @app.route('/api/stream/<token>')
