@@ -709,15 +709,18 @@ class NeteaseMusicClient(BaseMusicClient):
         return song_infos
     '''parseplaylist'''
     @useparseheaderscookies
-    def parseplaylist(self, playlist_url: str, request_overrides: dict = None):
+    def parseplaylist(self, playlist_url: str, request_overrides: dict = None, progress_callback=None):
         # init
         playlist_url, playlist_id = self.session.head(playlist_url, allow_redirects=True, **(request_overrides := dict(request_overrides or {}))).url, None
-        with suppress(Exception): playlist_id, song_infos = parse_qs(urlparse(urlparse(playlist_url).fragment).query, keep_blank_values=True).get('id')[0], []
+        with suppress(Exception): playlist_id, song_infos = parse_qs(urlparse(playlist_url).query, keep_blank_values=True).get('id')[0], []
+        if not playlist_id:
+            with suppress(Exception): playlist_id, song_infos = parse_qs(urlparse(urlparse(playlist_url).fragment).query, keep_blank_values=True).get('id')[0], []
         if not playlist_id: playlist_id, song_infos = urlparse(playlist_url).path.strip('/').split('/')[-1].removesuffix('.html').removesuffix('.htm'), []
         if (not (hostname := obtainhostname(url=playlist_url))) or (not hostmatchessuffix(hostname, NETEASE_MUSIC_HOSTS)): return song_infos
         # get tracks in playlist
         (resp := self.post('https://music.163.com/api/v6/playlist/detail', data={'id': playlist_id}, **request_overrides)).raise_for_status()
         tracks_in_playlist = (safeextractfromdict((playlist_result := resp2json(resp=resp)), ['playlist', 'trackIds'], []) or [])
+        if progress_callback: progress_callback(None, 0, len(tracks_in_playlist))
         # parse track by track in playlist
         with Progress(TextColumn("{task.description}"), BarColumn(bar_width=None), MofNCompleteColumn(), TimeRemainingColumn(), refresh_per_second=10) as main_process_context:
             main_progress_id = main_process_context.add_task(f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed (0/{len(tracks_in_playlist)}) SongInfo", total=len(tracks_in_playlist))
@@ -727,8 +730,12 @@ class NeteaseMusicClient(BaseMusicClient):
                 song_info_flac = self._parsewiththirdpartapis(search_result=track_info, request_overrides=request_overrides)
                 lossless_quality_is_sufficient = False if (cookies := self.default_cookies or request_overrides.get('cookies')) and (cookies != DEFAULT_COOKIES) else True
                 with suppress(Exception): song_info = self._parsewithofficialapiv1(search_result=track_info, song_info_flac=song_info_flac, lossless_quality_is_sufficient=lossless_quality_is_sufficient, request_overrides=request_overrides)
-                if (song_info := song_info if song_info.with_valid_download_url else song_info_flac).with_valid_download_url: song_infos.append(song_info); continue
+                if (song_info := song_info if song_info.with_valid_download_url else song_info_flac).with_valid_download_url:
+                    song_infos.append(song_info)
+                    if progress_callback: progress_callback(song_info, idx + 1, len(tracks_in_playlist))
+                    continue
                 self.logger_handle.warning(f'Fail to parse track info {track_info}', disable_print=self.disable_print)
+                if progress_callback: progress_callback(None, idx + 1, len(tracks_in_playlist))
             main_process_context.advance(main_progress_id, 1); main_process_context.update(main_progress_id, description=f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed ({idx+1}/{len(tracks_in_playlist)}) SongInfo")
         # post processing
         playlist_name = legalizestring(safeextractfromdict(playlist_result, ['playlist', 'name'], None) or f"playlist-{playlist_id}")
