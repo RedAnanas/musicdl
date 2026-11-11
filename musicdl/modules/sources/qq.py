@@ -491,23 +491,17 @@ class QQMusicClient(BaseMusicClient):
         # get tracks in playlist
         (resp := self.get("https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg", headers={"Referer": f"https://y.qq.com/n/ryqq/playlist/{playlist_id}"}, params={"disstid": str(playlist_id), "type": "1", "json": "1", "utf8": "1", "onlysong": "0", "format": "json"}, **request_overrides)).raise_for_status()
         tracks_in_playlist = (safeextractfromdict((playlist_result := resp2json(resp=resp)), ['cdlist', 0, 'songlist'], []) or safeextractfromdict(playlist_result, ['cdlist', 0, 'list'], []) or safeextractfromdict(playlist_result, ['songlist'], []) or [])
-        if progress_callback: progress_callback(None, 0, len(tracks_in_playlist))
-        # parse track by track in playlist
-        with Progress(TextColumn("{task.description}"), BarColumn(bar_width=None), MofNCompleteColumn(), TimeRemainingColumn(), refresh_per_second=10) as main_process_context:
-            main_progress_id = main_process_context.add_task(f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed (0/{len(tracks_in_playlist)}) SongInfo", total=len(tracks_in_playlist))
-            for idx, track_info in enumerate(tracks_in_playlist):
-                if idx > 0: main_process_context.advance(main_progress_id, 1); main_process_context.update(main_progress_id, description=f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed ({idx}/{len(tracks_in_playlist)}) SongInfo")
-                song_info = SongInfo(source=self.source, raw_data={'search': track_info, 'download': {}, 'lyric': {}})
-                song_info_flac = self._parsewiththirdpartapis(search_result=track_info, request_overrides=request_overrides)
-                lossless_quality_is_sufficient = False if self.default_cookies or request_overrides.get('cookies') else True
-                with suppress(Exception): song_info = self._parsewithofficialapiv1(search_result=track_info, song_info_flac=song_info_flac, lossless_quality_is_sufficient=lossless_quality_is_sufficient, request_overrides=request_overrides)
-                if (song_info := song_info if song_info.with_valid_download_url else song_info_flac).with_valid_download_url:
-                    song_infos.append(song_info)
-                    if progress_callback: progress_callback(song_info, idx + 1, len(tracks_in_playlist))
-                    continue
-                self.logger_handle.warning(f'Fail to parse track info {track_info}', disable_print=self.disable_print)
-                if progress_callback: progress_callback(None, idx + 1, len(tracks_in_playlist))
-            main_process_context.advance(main_progress_id, 1); main_process_context.update(main_progress_id, description=f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed ({idx+1}/{len(tracks_in_playlist)}) SongInfo")
+        def parse_track(client, track_info):
+            track_overrides = copy.deepcopy(request_overrides)
+            song_info = SongInfo(source=client.source, raw_data={'search': track_info, 'download': {}, 'lyric': {}})
+            song_info_flac = client._parsewiththirdpartapis(search_result=track_info, request_overrides=track_overrides)
+            lossless_quality_is_sufficient = False if client.default_cookies or track_overrides.get('cookies') else True
+            with suppress(Exception): song_info = client._parsewithofficialapiv1(search_result=track_info, song_info_flac=song_info_flac, lossless_quality_is_sufficient=lossless_quality_is_sufficient, request_overrides=track_overrides)
+            if (song_info := song_info if song_info.with_valid_download_url else song_info_flac).with_valid_download_url:
+                return song_info
+            return None
+
+        song_infos = self._parse_playlist_tracks(tracks_in_playlist, parse_track, progress_callback)
         # post processing
         playlist_name = legalizestring(safeextractfromdict(playlist_result, ['cdlist', 0, 'dissname'], None) or f"playlist-{playlist_id}")
         song_infos, work_dir = self._removeduplicates(song_infos=song_infos), self._constructuniqueworkdir(keyword=playlist_name)

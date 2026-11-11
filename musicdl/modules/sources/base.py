@@ -127,6 +127,40 @@ class BaseMusicClient():
         self.session.headers = self.default_headers
         self.audio_link_tester = AudioLinkTester(headers=copy.deepcopy(self.default_download_headers), cookies=copy.deepcopy(self.default_download_cookies))
         self.quark_audio_link_tester = AudioLinkTester(headers=copy.deepcopy(self.quark_default_download_headers), cookies=copy.deepcopy(self.quark_default_download_cookies))
+    def _parse_playlist_tracks(self, tracks, parse_track, progress_callback=None):
+        """每张歌单最多并发三首，独立会话解析并按原顺序返回。"""
+        results = [None] * len(tracks)
+        if progress_callback:
+            progress_callback(None, 0, len(tracks))
+
+        def parse_one(track):
+            client = copy.copy(self)
+            client.default_headers = copy.deepcopy(self.default_headers)
+            client.default_cookies = copy.deepcopy(self.default_cookies)
+            client.session = client.audio_link_tester = client.quark_audio_link_tester = None
+            client._initsession()
+            try:
+                return parse_track(client, copy.deepcopy(track))
+            finally:
+                client.session.close()
+                client.audio_link_tester.session.close()
+                client.quark_audio_link_tester.session.close()
+
+        with ThreadPoolExecutor(max_workers=3) as executor, Progress(TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), disable=self.disable_print) as progress:
+            task = progress.add_task("歌单解析", total=len(tracks))
+            futures = {executor.submit(parse_one, track): index for index, track in enumerate(tracks)}
+            for processed, future in enumerate(as_completed(futures), 1):
+                song = None
+                try:
+                    song = future.result()
+                except Exception as error:
+                    self.logger_handle.warning(f'歌单单曲解析失败：{type(error).__name__}', disable_print=self.disable_print)
+                results[futures[future]] = song
+                progress.advance(task)
+                if progress_callback:
+                    progress_callback(song, processed, len(tracks))
+        return [song for song in results if song is not None]
+
     '''_constructsearchurls'''
     def _constructsearchurls(self, keyword: str, rule: dict = None, request_overrides: dict = None) -> list:
         raise NotImplementedError('not to be implemented')
