@@ -1,3 +1,4 @@
+
 '''
 Function:
     A modern web-based music search / download / player powered by musicdl.
@@ -13,6 +14,7 @@ Author:
     Built on top of CharlesPikachu/musicdl.
 '''
 import os
+import copy
 import re
 import time
 import uuid
@@ -264,6 +266,8 @@ def resolve_music_link(url, progress_callback=None):
         raise ValueError('无法识别该平台的歌单或歌曲链接')
     client = MANAGER.client(source)
     if kind == 'playlist':
+        client = copy.copy(client)
+        client.session = client.audio_link_tester = client.quark_audio_link_tester = None
         if source == 'QQMusicClient':
             playlist_id = (query.get('id') or [path.rsplit('/', 1)[-1]])[0]
             if not re.fullmatch(r'\d{1,20}', playlist_id):
@@ -273,6 +277,7 @@ def resolve_music_link(url, progress_callback=None):
             canonical_url = url
         if progress_callback and source in ('QQMusicClient', 'NeteaseMusicClient'):
             tracks = []
+            tracks_by_id = {}
             seen = set()
             def report(song, processed, total):
                 identifier = getattr(song, 'identifier', None) if song else None
@@ -280,9 +285,14 @@ def resolve_music_link(url, progress_callback=None):
                 if song and identifier not in seen:
                     seen.add(identifier)
                     track = _track_payload(song, REGISTRY.add(song, source))
-                if track: tracks.append(track)
+                if track:
+                    tracks.append(track)
+                    tracks_by_id[identifier] = track
                 progress_callback(track, processed, total)
-            client.parseplaylist(canonical_url, progress_callback=report)
+            songs = client.parseplaylist(canonical_url, progress_callback=report)
+            if songs is not None:
+                ordered = list(dict.fromkeys(getattr(song, "identifier", None) for song in songs))
+                return [tracks_by_id[key] for key in ordered if key in tracks_by_id]
             return tracks
         songs = client.parseplaylist(canonical_url)
     else:

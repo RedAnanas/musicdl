@@ -117,6 +117,24 @@ class MusicFlowDownloadApiTest(unittest.TestCase):
                     self.assertEqual(len(result['tracks']), 1)
         self.assertIn('https://y.qq.com/n/ryqq/playlist/9784311226', playlist_urls)
 
+    def test_playlist_final_order_matches_original_after_parallel_progress(self):
+        """并发结果可先到先显示，最终结果恢复歌单顺序且复用已有令牌。"""
+        songs = [SimpleNamespace(identifier=str(index), with_valid_download_url=True, source='NeteaseMusicClient',
+                                 song_name=str(index), singers='歌手', album='', ext='mp3',
+                                 file_size='', duration='', cover_url='') for index in range(3)]
+        progress = []
+
+        def parse_playlist(url, progress_callback):
+            for completed, index in enumerate((2, 0, 1), 1):
+                progress_callback(songs[index], completed, 3)
+            return songs
+
+        source = SimpleNamespace(parseplaylist=parse_playlist)
+        with patch.object(web.MANAGER, 'client', return_value=source), patch.object(web.REGISTRY, 'add', side_effect=lambda song, _source: song.identifier):
+            result = web.resolve_music_link('https://music.163.com/playlist?id=123', lambda track, processed, total: progress.append(track['token']))
+        self.assertEqual(progress, ['2', '0', '1'])
+        self.assertEqual([track['token'] for track in result], ['0', '1', '2'])
+
     def test_playlist_progress_is_visible_before_completion(self):
         """歌单逐首解析时，已完成的曲目应立即可见。"""
         ready, release = threading.Event(), threading.Event()

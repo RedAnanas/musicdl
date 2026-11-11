@@ -180,6 +180,8 @@ Only successfully downloaded items are returned.
 
 #### `MusicClient.parseplaylist(playlist_url: str) -> list[SongInfo]`
 
+网易云和 QQ 音乐歌单按每张最多 3 首并发解析，单首使用独立会话。进度随完成逐首上报，返回结果保留歌单顺序。两个歌单同时解析时各自拥有 3 个解析任务；失败曲目计入已处理数量，成功结果继续保留。
+
 Tries to parse a playlist URL by asking enabled source clients one by one.
 
 What it does:
